@@ -3,6 +3,7 @@ def fancy_add(x, y):
 
     if (y > 10 and x < 1):
         b = b + 10
+        b = b + 2
 
     if (y < 2 and x > 3):
         b = x * x

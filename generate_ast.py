@@ -49,26 +49,6 @@ def generate_ast(filepath: str):
 
     return tree
 
-def compare_Constant(c1: Constant, c2:Constant):
-    if c1.value != c2.value:
-        return False
-    return True
-
-def compare_value(c1, c2):
-    if type(c1) != type(c2):
-        return False
-
-    c1_type = type(c1)
-
-    if c1_type == Constant:
-        are_equal = c1.value == c2.value
-    elif c1_type == Name: # probably doesn't belong here as this is not a value but o well
-        are_equal = c1.id == c2.id
-    else:
-        raise Exception(f'Unknown value type: {type(c1)} on line {c1.lineno}')    
-
-    return are_equal
-
 def compare_Compare(c1: Compare, c2: Compare):
     left1 = c1.left.id
     left2 = c2.left.id
@@ -92,7 +72,7 @@ def compare_Compare(c1: Compare, c2: Compare):
         cmp1 = c1.comparators[i1_cursor]
         cmp2 = c2.comparators[i2_cursor]
 
-        if not compare_value(cmp1, cmp2):
+        if not node_equality(cmp1, cmp2):
             are_equal = False
         
         o1 = c1.ops[i1_cursor]
@@ -111,6 +91,8 @@ def compare_Compare(c1: Compare, c2: Compare):
 
     return are_equal
 
+# flatten nodes for LCS
+# unpack things we should consider separately
 def flatten_ast_with_structure(node):
     flattened = []
     
@@ -122,21 +104,24 @@ def flatten_ast_with_structure(node):
         if isinstance(node, BoolOp):            
             flattened.extend(flatten_ast_with_structure(node.values))
         elif isinstance(node, If):
-            flattened.extend(flatten_ast_with_structure(node.test))
             flattened.extend(flatten_ast_with_structure(node.body))
     
     return flattened
 
+# comparison of nodes used for LCS
+# compare the items that affect everything about that statement - like for If, if the test changes, we say the whole statement has changed
 def node_equality(node1: stmt, node2: stmt):
     if type(node1) != type(node2):
         return False
     
-    if isinstance(node1, (BoolOp, If, While, For)):
+    if isinstance(node1, (BoolOp, While, For)):
         return True  # We flattened these, so just a type check is good
+    elif isinstance(node1, If):
+        return node_equality(node1.test, node2.test)
     elif isinstance(node1, Name):
         return node1.id == node2.id
     elif isinstance(node1, Constant):
-        return compare_Constant(node1, node2)
+        return node1.value == node2.value
     elif isinstance(node1, Compare):
         return compare_Compare(node1, node2)
     elif isinstance(node1, Return):
@@ -148,6 +133,7 @@ def node_equality(node1: stmt, node2: stmt):
     else:
         return True  # Default to True for other node types
 
+# like typical LCS but instead of checking for regular ==, we use node_equality
 def lcs_flattened(X, Y):
     m = len(X)
     n = len(Y)
@@ -161,11 +147,12 @@ def lcs_flattened(X, Y):
                 L[i][j] = max(L[i-1][j], L[i][j-1])
 
     # Backtrack to find the LCS
-    lcs_result = []
+    lcs_result = set()
     i, j = m, n
     while i > 0 and j > 0:
         if node_equality(X[i-1], Y[j-1]):
-            lcs_result.append((X[i-1], Y[j-1]))
+            # we append the nodes from both trees so we can just check the objects directly later
+            lcs_result.add((X[i-1], Y[j-1]))
             i -= 1
             j -= 1
         elif L[i-1][j] > L[i][j-1]:
@@ -173,8 +160,11 @@ def lcs_flattened(X, Y):
         else:
             j -= 1
 
-    return list(reversed(lcs_result))
+    # if we care about order, make lcs_result a list and reverse it.
+    # return list(reversed(lcs_result))
+    return lcs_result
 
+# AST diff
 def compare_stmtlist_lcs(slist1: list[stmt], slist2: list[stmt], diffs: list[Diff]):
     flat1 = flatten_ast_with_structure(slist1)
     flat2 = flatten_ast_with_structure(slist2)
@@ -185,6 +175,7 @@ def compare_stmtlist_lcs(slist1: list[stmt], slist2: list[stmt], diffs: list[Dif
 
     print(f'lcs: {lcs_result}')
 
+    # here we can just take advantage 
     # we ignore missing BoolOps because they are just containers
     for statement in flat1:
         if type(statement) not in [BoolOp] and statement not in [x[0] for x in lcs_result]:
