@@ -10,21 +10,21 @@ class Diff:
     def __repr__(self):
         return f'{self.mod_type} on line number {self.expression2.lineno if self.expression2 else self.expression1.lineno}. Expression: {self.expression2}'
 
-    def get_text_between_line_col(self, text: str, lineno, col_offset, end_lineno, end_col_offset):
+    def get_text_between_line_col(self, text: str, expression: stmt):
         expression_text = ''
         line_num = 1
         for line in text.splitlines():
-            if line_num < lineno:
+            if line_num < expression.lineno:
                 line_num += 1
                 continue
-            elif line_num > end_lineno:
+            elif line_num > expression.end_lineno:
                 break
-            elif line_num == lineno and line_num == end_lineno:
-                expression_text += line[col_offset:end_col_offset]
-            elif line_num == end_lineno:
-                expression_text += line[:end_col_offset]
-            elif line_num == lineno:
-                expression_text += line[col_offset:]            
+            elif line_num == expression.lineno and line_num == expression.end_lineno:
+                expression_text += line[expression.col_offset:expression.end_col_offset]
+            elif line_num == expression.end_lineno:
+                expression_text += line[:expression.end_col_offset]
+            elif line_num == expression.lineno:
+                expression_text += line[expression.col_offset:]            
             else:
                 expression_text += line
             line_num += 1
@@ -33,15 +33,12 @@ class Diff:
 
     def print_code(self, file1, file2):
         if self.expression1 != None:
-            print(f'{self.mod_type}  from line {self.expression1.lineno} of file A:\n{self.get_text_between_line_col(
-                file1, self.expression1.lineno, self.expression1.col_offset, self.expression1.end_lineno, self.expression1.end_col_offset)}')
+            print(f'{self.mod_type} from line {self.expression1.lineno} of file A: {self.expression1}\n{self.get_text_between_line_col(file1, self.expression1)}')
         elif self.expression2 != None:
-            print(f'{self.mod_type} from line {self.expression2.lineno} of file B\n{self.get_text_between_line_col(
-                file2, self.expression2.lineno, self.expression2.col_offset, self.expression2.end_lineno, self.expression2.end_col_offset
-                )}')
+            print(f'{self.mod_type} from line {self.expression2.lineno} of file B: {self.expression2}\n{self.get_text_between_line_col(file2, self.expression2)}')
 
 
-def record_diff2(diffs:list[Diff], stmt1: stmt, stmt2: stmt, modification_type: str):
+def record_diff(diffs:list[Diff], stmt1: stmt, stmt2: stmt, modification_type: str):
     diffs.append(Diff(modification_type, stmt1, stmt2))
 
 def generate_ast(filepath: str):
@@ -107,9 +104,9 @@ def compare_Compare(c1: Compare, c2: Compare):
         i1_cursor += 1
         i2_cursor += 1
 
-    for comparator in c1.comparators[i1_cursor:]:
+    if any(c1.comparators[i1_cursor:]):
         are_equal = False
-    for comparator in c2.comparators[i2_cursor:]:
+    if any(c2.comparators[i2_cursor:]):
         are_equal = False
 
     return are_equal
@@ -121,22 +118,20 @@ def flatten_ast_with_structure(node):
         for item in node:
             flattened.extend(flatten_ast_with_structure(item))
     elif isinstance(node, AST):
-        flattened.append(node)        
+        flattened.append(node)
         if isinstance(node, BoolOp):            
             flattened.extend(flatten_ast_with_structure(node.values))
         elif isinstance(node, If):
             flattened.extend(flatten_ast_with_structure(node.test))
             flattened.extend(flatten_ast_with_structure(node.body))
-        elif isinstance(node, Return):
-            flattened.extend(flatten_ast_with_structure(node.value))
     
     return flattened
 
-def node_equality(node1, node2):
+def node_equality(node1: stmt, node2: stmt):
     if type(node1) != type(node2):
         return False
     
-    if isinstance(node1, (BoolOp, If, While, For, Return, BinOp)):
+    if isinstance(node1, (BoolOp, If, While, For)):
         return True  # We flattened these, so just a type check is good
     elif isinstance(node1, Name):
         return node1.id == node2.id
@@ -144,6 +139,12 @@ def node_equality(node1, node2):
         return compare_Constant(node1, node2)
     elif isinstance(node1, Compare):
         return compare_Compare(node1, node2)
+    elif isinstance(node1, Return):
+        return node_equality(node1.value, node2.value)
+    elif isinstance(node1, Assign):
+        return node_equality(node1.targets[0], node2.targets[0]) and node_equality(node1.value, node2.value)
+    elif isinstance(node1, BinOp):
+        return node_equality(node1.left, node2.left) and node_equality(node1.right, node2.right) and node_equality(node1.op, node2.op)
     else:
         return True  # Default to True for other node types
 
@@ -184,13 +185,14 @@ def compare_stmtlist_lcs(slist1: list[stmt], slist2: list[stmt], diffs: list[Dif
 
     print(f'lcs: {lcs_result}')
 
+    # we ignore missing BoolOps because they are just containers
     for statement in flat1:
-        if statement not in [x[0] for x in lcs_result] and not isinstance(statement, BoolOp):
-            record_diff2(diffs, statement, None, 'deletion')
+        if type(statement) not in [BoolOp] and statement not in [x[0] for x in lcs_result]:
+            record_diff(diffs, statement, None, 'deletion')
             
     for statement in flat2:
         if statement not in [x[1] for x in lcs_result] and not isinstance(statement, BoolOp):
-            record_diff2(diffs, None, statement, 'addition')
+            record_diff(diffs, None, statement, 'addition')
     
     return len(diffs) == 0
 
